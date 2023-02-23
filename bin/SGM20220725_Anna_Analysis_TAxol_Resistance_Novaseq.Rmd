@@ -1,0 +1,1197 @@
+---
+title: "SGM20220725_Anna_Analysis_TAxol_Resistance_new_Clones"
+author: "Stefano G Manzo"
+date: "2022-07-25"
+output: html_document
+---
+This script measure teh detachment score for genes and it has been used to emasure NL association score for ABCB1 in many differnt conditions performe by Anna G. Manjon at B5
+nzlae
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressMessages(suppressWarnings(library(GenomicRanges)))
+
+
+suppressMessages(suppressWarnings(library(RColorBrewer)))
+suppressMessages(suppressWarnings(library(reshape2)))
+suppressMessages(suppressWarnings(library(ggbeeswarm)))
+suppressMessages(suppressWarnings(library(limma)))
+suppressMessages(suppressWarnings(library(edgeR)))
+suppressMessages(suppressWarnings(library(grid)))
+library(VennDiagram)
+library(stringr)
+library(khroma)
+library(dtplyr)
+library("dplyr")
+library("ggplot2")
+library("rtracklayer")
+library("ggpubr")
+library("ggrastr")
+```
+
+```{r}
+#prepare output
+output_dir<- "/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/SGM20220725_Anna_New_Taxol_Clones"
+
+dir.create(output_dir, showWarnings = FALSE)
+```
+
+```{r}
+# Parameter to extend bins to a certain distance (bases) for a more accurate 
+# lamina interaction score
+ext<- 1e4
+```
+
+```{r}
+#Get the sample data frame prepared
+
+input_dir<- "/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/results/counts/bin-gatc"
+```
+
+```{r}
+#Use samples from a previous document
+
+
+samples <-list.files(path = "/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/results/counts/bin-gatc", pattern = "Lmnb2")
+#samples_Tom <-list.files(path = "/DATA/scratch/usr/t.v.schaik/proj/sManzo_pADamID/ts210903_samples_Anna_pADamID_RPE/results/tracks/normalized/bin-20kb", pattern="LaminB")
+
+
+samples <-as.data.frame(samples)
+
+#samples$sample <- gsub("-10kb", "-gatc", samples$sample)
+
+samples.lmnb2<- samples$sample
+
+n<- nrow(samples)
+```
+
+```{r}
+# Read Chromosome size
+chrom_sizes<-read.table("/DATA/scratch/usr/t.v.schaik/data/genomes/GRCh38/hg38.chrom.sizes")
+names(chrom_sizes)<- c("seqnames", "length")
+row.names(chrom_sizes)<-chrom_sizes$seqnames
+```
+
+
+```{r}
+#Prepare output files
+df.count.file<- file.path(output_dir, "df_count.rds")
+genes.file<- file.path(output_dir, "genes.rds")
+gene.counts.file<- file.path(output_dir, "genes_counts.rds")
+```
+
+```{r}
+### 1) Count reads in genes
+
+# ts220203 - improve Stefano's script
+
+# New code. Changes:
+# - only read data if output .rds file does not exist
+# - change to read.table to read_tsv, which should be faster
+
+# 1) Read count data frame
+
+library(tidyverse)
+
+read_sample_and_dam <- function(x, 
+                                input_dir = "/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/results/counts/bin-gatc") {
+  
+  # read sample and dam separately
+  sample <- read_tsv(file.path(input_dir,
+                               x),
+                     show_col_types = F,
+                     col_names = c("seqnames",
+                                   "start",
+                                   "end",
+                                   x),
+                     col_types = c(seqnames = "-",
+                                   start = "-",
+                                   end = "-"))
+  
+  dam <- read_tsv(file.path(input_dir,
+                            gsub("Lmnb2", "Dam", x)),
+                  show_col_types = F,
+                  col_names = c("seqnames",
+                                "start",
+                                "end",
+                                paste0(x, "_Dam")),
+                  col_types = c(seqnames = "-",
+                                start = "-",
+                                end = "-"))
+  
+  # combine
+  sample <- bind_cols(sample, dam)
+  
+  # and return
+  sample
+  
+}
+
+if (! file.exists(df.count.file)) {
+  
+  # first, load bins
+  # add +1 to the start, as this was bed-based
+  bins <- read_tsv(file.path(input_dir,
+                             samples.lmnb2[1]),
+                   col_names = c("seqnames",
+                                 "start",
+                                 "end")) %>%
+    dplyr::select(1:3) %>%
+    mutate(start = start + 1)
+  
+  # load counts
+  tib_count <- purrr::map(samples.lmnb2,
+                           read_sample_and_dam) %>%
+    purrr::reduce(bind_cols)
+  
+  # combine the two
+  tib_count <- bind_cols(bins, tib_count)
+  
+  # convert to GRanges and set seqlevels
+  df.count <- as(tib_count, "GRanges")
+  
+  # Set seqlevels
+  seqlevels(df.count, pruning = "coarse") <- c(paste0("chr", 1:22), "chrX")
+  seqlengths(df.count) <- chrom_sizes[seqlevels(df.count), "length"]
+  
+  saveRDS(df.count, df.count.file)
+  
+} else {
+  df.count <- readRDS(df.count.file)
+}
+
+```
+
+```{r}
+#I need the gene locations to count the data
+genes<- import("/DATA/scratch/usr/t.v.schaik/data/gene_builds/GRCh38/gencode.v24.primary_assembly.annotation.gtf")
+genes <- genes[genes$type=="gene"]
+ 
+#Filter for protein coding genes
+genes<-genes[genes$gene_type == "protein_coding"]
+ 
+#filter for chromosomes
+genes <- genes[seqnames(genes) %in% c(paste0("chr", 1:22), "chrX")]
+ 
+#Set seqlevels
+seqlevels(genes, pruning = "coarse") <- c(paste0("chr", 1:22),"chrX")
+seqlengths(genes)<- chrom_sizes[seqlevels(genes), "length"]
+ 
+#First extend the genes
+genes.query <- genes
+mcols(genes.query)<- NULL
+start(genes.query)<- start(genes.query) - ext
+end(genes.query)<- end(genes.query) + ext
+ 
+#Overlap genes with the counts
+ovl<-findOverlaps(genes.query, df.count)
+ 
+#Get the number of GATC fragment for every gene query
+mcols(genes) [,"GATC_fragments"]<- 0
+t <- table(queryHits(ovl))
+mcols(genes)[as.integer(names(t)), "GATC_fragments"] <- as.numeric(t)
+ 
+#Get the summed signal for every gene
+gene.counts<- genes
+mcols(gene.counts) <-NULL
+#mcols(gene.counts)[, names(mcols(df.count))]<-NA
+ 
+ 
+# Faster tibble/dtplyr implementation
+tib <- lazy_dt(as.tibble(ovl)) %>% #as_tibble()
+  rename_all(~ c("idx_genes", "idx_gatc")) %>%
+  as_tibble()
+ 
+tib <- bind_cols(tib,
+                 as.tibble(mcols(df.count[tib$idx_gatc]))) #as_tibble()
+ 
+tib_summarise <- tib %>%
+  gather(key, value, -contains("idx"))
+ 
+tib_summarise <- lazy_dt(tib_summarise) %>%
+  group_by(idx_genes, key) %>%
+  summarise(count = sum(value)) %>%
+  ungroup() %>%
+  mutate(key = factor(key, levels = str_replace_all(names(mcols(df.count)), "-", "."))) %>%
+  as.tibble() #as_tibble()
+ 
+tib_genes <- tib_summarise %>%
+  spread(key, count)
+ 
+mcols(gene.counts) <- tib_genes %>%
+  dplyr::select(-idx_genes)
+ 
+names(mcols(gene.counts)) <- names(mcols(df.count))
+saveRDS(genes, genes.file)
+saveRDS(gene.counts, gene.counts.file)
+```
+```{r}
+df.counts<-readRDS(df.count.file)
+genes<- readRDS(genes.file)
+gene.counts<- readRDS(gene.counts.file)
+```
+### 2) Normalize gene counts
+
+Next, we would like to normalize the gene counts for various parameters:
+
+  * Library size
+  * Lamina / Dam ratio
+  * More?
+  
+Absolute read filtering
+```{r}
+# To-do: filter genes for having too few reads?
+#        alternatively, filter for number of GATC fragments overlapping a gene?
+
+idx<- rowSums(as(mcols(gene.counts), "data.frame") >=10) >=2
+gene.counts <- gene.counts[idx]
+genes <- genes[idx]
+```
+The library size
+```{r}
+library_size <- colSums(as(mcols(df.count), "data.frame"))
+library_size
+```
+
+```{r}
+# Also combined the counts (Dam + lamina) and have them separate
+gene.counts.combined<- gene.counts.lamina <- gene.counts.dam<- gene.counts
+mcols(gene.counts.combined) <- (as(mcols(gene.counts)[, seq(1, 2*n, 2)], "data.frame")+
+                                  as(mcols(gene.counts)[, seq(2, 2*n, 2)], "data.frame"))
+mcols(gene.counts.lamina) <-mcols(gene.counts)[,seq(1, 2*n,2)]
+mcols(gene.counts.dam) <-mcols(gene.counts)[,seq(2, 2*n,2)]
+
+#Normalize to 1 M reads
+norm_factor <- library_size/ 1e6
+gene.counts.norm<- gene.counts
+mcols(gene.counts.norm)<- t(t(as(mcols(gene.counts), "data.frame"))/ norm_factor)
+
+#Also create a 1M mean counts of Dam and Lamina per experiment
+gene.counts.norm.combined<- gene.counts.norm
+mcols(gene.counts.norm.combined) <- (as(mcols(gene.counts.norm) [,seq(1, 2*n, 2)], "data.frame")+
+                                      as(mcols(gene.counts.norm) [,seq(2, 2*n, 2)], "data.frame")) /2
+```
+
+```{r}
+# Normalize Lamina over Dam function (ratio2)
+NormalizeDamID <- function(df, pseudo = 1) {
+  # This function expects a data frame that is composed of lamina and Dam-only
+  # columns, in that order. It simply determines the log2 ratio of the two for
+  # every pair of columns. A pseudocount is added to prevent problems.
+  n <- ncol(df)
+  df.norm <- log2((df[, seq(1, n-1, 2)] + pseudo) / (df[, seq(2, n, 2)] + pseudo))
+  df.norm
+}
+
+#Normalize LB over Dam (ratio2)
+genes.norm <- gene.counts
+mcols(genes.norm) <- NormalizeDamID(as(mcols(gene.counts.norm), "data.frame"))
+mcols(genes.norm) <- mcols(genes.norm)[, samples$sample]
+
+# Plot the distributions for the various samples This does not work
+#plot(1, 1, type = "n", xlim = c(-6, 4), ylim = c(0, 0.6),
+ #    xlab = "Dam-ratio (log2)", ylab = "density", main = "Density Dam ratio for genes")
+
+#for (i in 1:n) {
+ # lines(density(mcols(genes.norm)[, i],na.rm = TRUE,), col = samples, lwd = 2,
+       # lty = as.numeric(samples.df$integration[i]),)
+#}
+
+#legend("topright", legend = levels(samples), 
+     #  pch = 19, col = 1:length(levels(samples)))
+```
+
+```{r}
+#Scale the data to the same mean and stdev
+genes.norm.scaled<-genes.norm
+mcols(genes.norm.scaled)<- scale(as(mcols(genes.norm.scaled), "data.frame"))
+```
+
+```{r}
+# Save files as RDS
+saveRDS(samples, file.path(output_dir, "samples.rds"))
+saveRDS(genes.norm.scaled, file.path(output_dir, "genes_norm_filtered.rds"))
+
+# First, change the mcols of the genes
+mcols(genes) <- mcols(genes)[, c("gene_id", "gene_name", "GATC_fragments")]
+saveRDS(genes, file.path(output_dir, "genes_filtered.rds"))
+```
+
+```{r}
+# Samples data frame - basically metadata
+padamid.samples<- readRDS(file.path(output_dir,
+                                    "samples.rds"))
+
+# Filtered genes used in the pA-DamID analysis
+padamid.genes <- readRDS(file.path(output_dir, 
+                                   "genes_filtered.rds"))
+
+# Data frame with per-gene information on differential analysis
+#padamid.results <- readRDS(file.path(output_dir,
+                                    #  "Differential_score.rds"))
+padamid.norm <- readRDS(file.path(output_dir,
+                                  "genes_norm_filtered.rds"))
+
+names(mcols(padamid.norm))<-padamid.samples$samples
+
+class(padamid.norm)
+#class(padamid.results)
+class(padamid.genes)
+class(padamid.samples)
+
+padamid_norm_df<- as(mcols(padamid.norm), "data.frame") 
+padamid_genes_df<- as(mcols(padamid.genes), "data.frame")
+#binding gene name and danID score
+damid_score_gene<-cbind(padamid_genes_df, padamid_norm_df)
+
+
+Taxol_damid_score_gene<-damid_score_gene %>%mutate(DPURO_3=(`pADamID-DPURO3_r1_Lmnb2-gatc.counts.txt.gz`+ `pADamID-DPURO3_r2_Lmnb2-gatc.counts.txt.gz`)/2) %>%
+                                            mutate(TXR3=(`pADamID-TXR3_r1_Lmnb2-gatc.counts.txt.gz`+ `pADamID-TXR3_r2_Lmnb2-gatc.counts.txt.gz`)/2) %>%
+                                            mutate(TXR4=(`pADamID-TXR4_r1_Lmnb2-gatc.counts.txt.gz`+ `pADamID-TXR4_r2_Lmnb2-gatc.counts.txt.gz`)/2) %>%
+                                            mutate(RPE0=(`pADamID-RPE0_r1_Lmnb2-gatc.counts.txt.gz`+ `pADamID-RPE0_r2_Lmnb2-gatc.counts.txt.gz`)/2) %>%
+                                            mutate(TXR5=(`pADamID-TXR5_r1_Lmnb2-gatc.counts.txt.gz`+ `pADamID-TXR5_r2_Lmnb2-gatc.counts.txt.gz`)/2) %>%
+                                            mutate(TXR6=(`pADamID-TXR6_r1_Lmnb2-gatc.counts.txt.gz`+ `pADamID-TXR6_r2_Lmnb2-gatc.counts.txt.gz`)/2) %>%
+                                            mutate(ANCHOR_P=(`pADamID-iCA3P_r1_Lmnb2-gatc.counts.txt.gz`+ `pADamID-iCA3P_r2_Lmnb2-gatc.counts.txt.gz`)/2) %>%
+                                            mutate(ANCHOR_P_TXR=(`pADamID-iCA3P_TXR_r1_Lmnb2-gatc.counts.txt.gz`+ `pADamID-iCA3P_TXR_r2_Lmnb2-gatc.counts.txt.gz`)/2) %>%
+                                            dplyr::rename(ANCHOR_c7_r1=`pADamID-iCA3_c7_r1_Lmnb2-gatc.counts.txt.gz`)%>%
+                                            dplyr::rename(ANCHOR_c7_TXR_r1=`pADamID-iCA3_c7_TXR_r1_Lmnb2-gatc.counts.txt.gz`)
+
+ABCB1<-Taxol_damid_score_gene%>%filter(gene_name=="ABCB1")
+```
+
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_TXR3.pdf")
+Taxol_damid_score_gene%>% ggplot(., aes(x= DPURO_3, y= TXR3))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("TXR_Clone3,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= DPURO_3, y= TXR3), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+```
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_TXR4.pdf")
+Taxol_damid_score_gene%>% ggplot(., aes(x= DPURO_3, y= TXR4))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("TXR_Clone4,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= DPURO_3, y= TXR4), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+```
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_TXR5.pdf")
+Taxol_damid_score_gene%>% ggplot(., aes(x= RPE0, y= TXR5))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("TXR_Clone5,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE0, y= TXR5), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+```
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_TXR6.pdf")
+Taxol_damid_score_gene%>% ggplot(., aes(x= RPE0, y= TXR6))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("TXR_Clone6,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE0, y= TXR6), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+```
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_Anchor3_parental.pdf")
+Taxol_damid_score_gene%>% ggplot(., aes(x= ANCHOR_P, y= ANCHOR_P_TXR))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("TXR_Anchor_Parental,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= ANCHOR_P, y= ANCHOR_P_TXR), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+```
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_Anchor3_Clone7.pdf")
+Taxol_damid_score_gene%>% ggplot(., aes(x= ANCHOR_c7_r1, y= ANCHOR_c7_TXR_r1))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("TXR_Anchor_clone 7,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= ANCHOR_c7_r1, y= ANCHOR_c7_TXR_r1), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+```
+
+Now I want to use old data from Anna and Tom to have  an overview of all TXR clones
+
+```{r}
+#prepare output
+output_dir<- "/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/SGM20220725_Anna_New_Taxol_Clones"
+
+dir.create(output_dir, showWarnings = FALSE)
+```
+
+```{r}
+# Parameter to extend bins to a certain distance (bases) for a more accurate 
+# lamina interaction score
+ext<- 1e4
+```
+
+```{r}
+#Get the ample data frame prepared
+
+input_dir<- "/DATA/scratch/usr/t.v.schaik/proj/sManzo_pADamID/ts210903_samples_Anna_pADamID_RPE/results/counts/bin-gatc"
+```
+
+```{r}
+#Use samples from a previous document
+
+
+#samples <-list.files(path = "/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/results/counts/bin-gatc", pattern = "Lmnb2")
+samples_Tom <-list.files(path = "/DATA/scratch/usr/t.v.schaik/proj/sManzo_pADamID/ts210903_samples_Anna_pADamID_RPE/results/counts/bin-gatc", pattern="LaminB2")
+
+
+samples_Tom <-as.data.frame(samples_Tom)
+
+#samples_Tom$sample <- gsub("-10kb", "-gatc", samples_Tom$sample)
+
+samples_Tom.lmnb2<- samples_Tom$sample
+
+n<- nrow(samples_Tom)
+```
+
+```{r}
+# Read Chromosome size
+chrom_sizes<-read.table("/DATA/scratch/usr/t.v.schaik/data/genomes/GRCh38/hg38.chrom.sizes")
+names(chrom_sizes)<- c("seqnames", "length")
+row.names(chrom_sizes)<-chrom_sizes$seqnames
+```
+
+
+```{r}
+
+#Prepare output files
+df.count_Tom.file<- file.path(output_dir, "df_count_Tom.rds")
+genes_Tom.file<- file.path(output_dir, "genes_Tom.rds")
+gene_Tom.counts.file<- file.path(output_dir, "genes_Tom_counts.rds")
+```
+
+```{r}
+### 1) Count reads in genes_Tom
+
+# ts220203 - improve Stefano's script
+
+# New code. Changes:
+# - only read data if output .rds file does not exist
+# - change to read.table to read_tsv, which should be faster
+
+# 1) Read count data frame
+
+library(tidyverse)
+
+read_sample_and_dam <- function(x, 
+                                input_dir = "/DATA/scratch/usr/t.v.schaik/proj/sManzo_pADamID/ts210903_samples_Anna_pADamID_RPE/results/counts/bin-gatc") {
+  
+  # read sample and dam separately
+  sample <- read_tsv(file.path(input_dir,
+                               x),
+                     show_col_types = F,
+                     col_names = c("seqnames",
+                                   "start",
+                                   "end",
+                                   x),
+                     col_types = c(seqnames = "-",
+                                   start = "-",
+                                   end = "-"))
+  
+  dam <- read_tsv(file.path(input_dir,
+                            gsub("LaminB2", "Dam", x)),
+                  show_col_types = F,
+                  col_names = c("seqnames",
+                                "start",
+                                "end",
+                                paste0(x, "_Dam")),
+                  col_types = c(seqnames = "-",
+                                start = "-",
+                                end = "-"))
+  
+  # combine
+  sample <- bind_cols(sample, dam)
+  
+  # and return
+  sample
+  
+}
+
+if (! file.exists(df.count_Tom.file)) {
+  
+  # first, load bins
+  # add +1 to the start, as this was bed-based
+  bins <- read_tsv(file.path(input_dir,
+                             samples_Tom.lmnb2[1]),
+                   col_names = c("seqnames",
+                                 "start",
+                                 "end")) %>%
+    dplyr::select(1:3) %>%
+    mutate(start = start + 1)
+  
+  # load counts
+  tib_count <- purrr::map(samples_Tom.lmnb2,
+                           read_sample_and_dam) %>%
+    purrr::reduce(bind_cols)
+  
+  # combine the two
+  tib_count <- bind_cols(bins, tib_count)
+  
+  # convert to GRanges and set seqlevels
+  df.count_Tom <- as(tib_count, "GRanges")
+  
+  # Set seqlevels
+  seqlevels(df.count_Tom, pruning = "coarse") <- c(paste0("chr", 1:22), "chrX")
+  seqlengths(df.count_Tom) <- chrom_sizes[seqlevels(df.count_Tom), "length"]
+  
+  saveRDS(df.count_Tom, df.count_Tom.file)
+  
+} else {
+  df.count_Tom <- readRDS(df.count_Tom.file)
+}
+
+```
+
+        /DATA/scratch/usr/t.v.schaik/proj/sManzo_pADamID/ts210903_samples_Anna_pADamID_RPE/results/counts/bin-20kb/A549_61_LaminB2_R1-20kb.counts.txt.gz
+```{r}
+#I need the gene locations to count the data
+genes_Tom<- import("/DATA/scratch/usr/t.v.schaik/data/gene_builds/GRCh38/gencode.v24.primary_assembly.annotation.gtf")
+genes_Tom <- genes_Tom[genes_Tom$type=="gene"]
+ 
+#Filter for protein coding genes_Tom
+genes_Tom<-genes_Tom[genes_Tom$gene_type == "protein_coding"]
+ 
+#filter for chromosomes
+genes_Tom <- genes_Tom[seqnames(genes_Tom) %in% c(paste0("chr", 1:22), "chrX")]
+ 
+#Set seqlevels
+seqlevels(genes_Tom, pruning = "coarse") <- c(paste0("chr", 1:22),"chrX")
+seqlengths(genes_Tom)<- chrom_sizes[seqlevels(genes_Tom), "length"]
+ 
+#First extend the genes_Tom
+genes_Tom.query <- genes_Tom
+mcols(genes_Tom.query)<- NULL
+start(genes_Tom.query)<- start(genes_Tom.query) - ext
+end(genes_Tom.query)<- end(genes_Tom.query) + ext
+ 
+#Overlap genes_Tom with the counts
+ovl<-findOverlaps(genes_Tom.query, df.count_Tom)
+ 
+#Get the number of GATC fragment for every gene query
+mcols(genes_Tom) [,"GATC_fragments"]<- 0
+t <- table(queryHits(ovl))
+mcols(genes_Tom)[as.integer(names(t)), "GATC_fragments"] <- as.numeric(t)
+ 
+#Get the summed signal for every gene
+gene_Tom.counts<- genes_Tom
+mcols(gene_Tom.counts) <-NULL
+#mcols(gene.counts)[, names(mcols(df.count_Tom))]<-NA
+ 
+ 
+# Faster tibble/dtplyr implementation
+tib <- lazy_dt(as.tibble(ovl)) %>% #as_tibble()
+  rename_all(~ c("idx_genes_Tom", "idx_gatc")) %>%
+  as_tibble()
+ 
+tib <- bind_cols(tib,
+                 as.tibble(mcols(df.count_Tom[tib$idx_gatc]))) #as_tibble()
+ 
+tib_summarise <- tib %>%
+  gather(key, value, -contains("idx"))
+ 
+tib_summarise <- lazy_dt(tib_summarise) %>%
+  group_by(idx_genes_Tom, key) %>%
+  summarise(count = sum(value)) %>%
+  ungroup() %>%
+  mutate(key = factor(key, levels = str_replace_all(names(mcols(df.count_Tom)), "-", "."))) %>%
+  as.tibble() #as_tibble()
+ 
+tib_genes_Tom <- tib_summarise %>%
+  spread(key, count)
+ 
+mcols(gene_Tom.counts) <- tib_genes_Tom %>%
+  dplyr::select(-idx_genes_Tom)
+ 
+names(mcols(gene_Tom.counts)) <- names(mcols(df.count_Tom))
+saveRDS(genes_Tom, genes_Tom.file)
+saveRDS(gene_Tom.counts, gene_Tom.counts.file)
+```
+
+df.count_Tom.file<- file.path(output_dir, "df_count_Tom.rds")
+genes_Tom.file<- file.path(output_dir, "genes_Tom.rds")
+gene_Tom.counts.file<- file.path(output_dir, "genes_Tom_counts.rds")
+```{r}
+
+df.counts_Tom<-readRDS(df.count_Tom.file)
+genes_Tom<- readRDS(genes_Tom.file)
+genes_Tom.count<- readRDS(gene_Tom.counts.file)
+```
+### 2) Normalize gene counts
+
+Next, we would like to normalize the gene counts for various parameters:
+
+  * Library size
+  * Lamina / Dam ratio
+  * More?
+  
+Absolute read filtering
+```{r}
+# To-do: filter genes_Tom for having too few reads?
+#        alternatively, filter for number of GATC fragments overlapping a gene?
+
+idx<- rowSums(as(mcols(genes_Tom.count), "data.frame") >=10) >=2
+genes_Tom.count <- genes_Tom.count[idx]
+genes_Tom <- genes_Tom[idx]
+```
+The library size
+```{r}
+library_size <- colSums(as(mcols(df.count_Tom), "data.frame"))
+library_size
+```
+
+```{r}
+# Also combined the counts (Dam + lamina) and have them separate
+genes_Tom.count.combined<- genes_Tom.count.lamina <- genes_Tom.count.dam<- genes_Tom.count
+mcols(genes_Tom.count.combined) <- (as(mcols(genes_Tom.count)[, seq(1, 2*n, 2)], "data.frame")+
+                                  as(mcols(genes_Tom.count)[, seq(2, 2*n, 2)], "data.frame"))
+mcols(genes_Tom.count.lamina) <-mcols(genes_Tom.count)[,seq(1, 2*n,2)]
+mcols(genes_Tom.count.dam) <-mcols(genes_Tom.count)[,seq(2, 2*n,2)]
+
+#Normalize to 1 M reads
+norm_factor <- library_size/ 1e6
+genes_Tom.count.norm<- genes_Tom.count
+mcols(genes_Tom.count.norm)<- t(t(as(mcols(genes_Tom.count), "data.frame"))/ norm_factor)
+
+#Also create a 1M mean counts of Dam and Lamina per experiment
+genes_Tom.count.norm.combined<- genes_Tom.count.norm
+mcols(genes_Tom.count.norm.combined) <- (as(mcols(genes_Tom.count.norm) [,seq(1, 2*n, 2)], "data.frame")+
+                                      as(mcols(genes_Tom.count.norm) [,seq(2, 2*n, 2)], "data.frame")) /2
+```
+
+```{r}
+# Normalize Lamina over Dam function (ratio2)
+NormalizeDamID <- function(df, pseudo = 1) {
+  # This function expects a data frame that is composed of lamina and Dam-only
+  # columns, in that order. It simply determines the log2 ratio of the two for
+  # every pair of columns. A pseudocount is added to prevent problems.
+  n <- ncol(df)
+  df.norm <- log2((df[, seq(1, n-1, 2)] + pseudo) / (df[, seq(2, n, 2)] + pseudo))
+  df.norm
+}
+
+#Normalize LB over Dam (ratio2)
+genes_Tom.norm <- genes_Tom.count
+mcols(genes_Tom.norm) <- NormalizeDamID(as(mcols(genes_Tom.count.norm), "data.frame"))
+mcols(genes_Tom.norm) <- mcols(genes_Tom.norm)[, samples_Tom$sample]
+```
+
+
+```{r}
+# Plot the distributions for the various samples_Tom This does not work
+#plot(1, 1, type = "n", xlim = c(-6, 4), ylim = c(0, 0.6),
+  #   xlab = "Dam-ratio (log2)", ylab = "density", main = "Density Dam ratio for genes_Tom")
+
+#for (i in 1:n) {
+#  lines(density(mcols(genes_Tom.norm)[, i],na.rm = TRUE,), col = samples_Tom, lwd = 2,
+ #       lty = as.numeric(samples_Tom.df$integration[i]),)
+#}
+
+#legend("topright", legend = levels(samples_Tom), 
+ #      pch = 19, col = 1:length(levels(samples_Tom)))
+```
+
+```{r}
+#Scale the data to the same mean and stdev
+genes_Tom.norm.scaled<-genes_Tom.norm
+mcols(genes_Tom.norm.scaled)<- scale(as(mcols(genes_Tom.norm.scaled), "data.frame"))
+```
+
+```{r}
+# Save files as RDS
+saveRDS(samples_Tom, file.path(output_dir, "samples_Tom.rds"))
+saveRDS(genes_Tom.norm.scaled, file.path(output_dir, "genes_Tom_norm_filtered.rds"))
+
+# First, change the mcols of the genes_Tom
+mcols(genes_Tom) <- mcols(genes_Tom)[, c("gene_id", "gene_name", "GATC_fragments")]
+saveRDS(genes_Tom, file.path(output_dir, "genes_Tom_filtered.rds"))
+```
+
+```{r}
+# samples_Tom data frame - basically metadata
+padamid.samples_Tom<- readRDS(file.path(output_dir,
+                                    "samples_Tom.rds"))
+
+# Filtered genes_Tom used in the pA-DamID analysis
+padamid.genes_Tom <- readRDS(file.path(output_dir, 
+                                   "genes_Tom_filtered.rds"))
+
+# Data frame with per-gene information on differential analysis
+#padamid.results <- readRDS(file.path(output_dir,
+                                    #  "Differential_score.rds"))
+padamid.norm <- readRDS(file.path(output_dir,
+                                  "genes_Tom_norm_filtered.rds"))
+
+names(mcols(padamid.norm))<-padamid.samples_Tom$samples_Tom
+
+class(padamid.norm)
+#class(padamid.results)
+class(padamid.genes_Tom)
+class(padamid.samples_Tom)
+
+padamid_norm_df<- as(mcols(padamid.norm), "data.frame") 
+padamid_genes_Tom_df<- as(mcols(padamid.genes_Tom), "data.frame")
+#binding gene name and danID score
+damid_score_gene_Tom<-cbind(padamid_genes_Tom_df, padamid_norm_df)
+```
+
+
+
+Now let's do the same for LMNB1 antibody. 
+
+```{r}
+#Use samples from a previous document
+
+
+#samples <-list.files(path = "/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/results/counts/bin-gatc", pattern = "Lmnb2")
+samples_Tom2 <-list.files(path = "/DATA/scratch/usr/t.v.schaik/proj/sManzo_pADamID/ts210903_samples_Anna_pADamID_RPE/results/counts/bin-gatc", pattern="LaminB1")
+
+
+samples_Tom2 <-as.data.frame(samples_Tom2)
+
+#samples_Tom$sample <- gsub("-10kb", "-gatc", samples_Tom$sample)
+
+samples_Tom2.lmnb1<- samples_Tom2$sample
+
+n<- nrow(samples_Tom2)
+```
+
+```{r}
+
+#Prepare output files
+df.count_Tom2.file<- file.path(output_dir, "df_count_Tom2.rds")
+genes_Tom2.file<- file.path(output_dir, "genes_Tom2.rds")
+gene_Tom2.counts.file<- file.path(output_dir, "genes_Tom2_counts.rds")
+```
+
+```{r}
+### 1) Count reads in genes_Tom2
+
+# ts220203 - improve Stefano's script
+
+# New code. Changes:
+# - only read data if output .rds file does not exist
+# - change to read.table to read_tsv, which should be faster
+
+# 1) Read count data frame
+
+library(tidyverse)
+
+read_sample_and_dam <- function(x, 
+                                input_dir = "/DATA/scratch/usr/t.v.schaik/proj/sManzo_pADamID/ts210903_samples_Anna_pADamID_RPE/results/counts/bin-gatc") {
+  
+  # read sample and dam separately
+  sample <- read_tsv(file.path(input_dir,
+                               x),
+                     show_col_types = F,
+                     col_names = c("seqnames",
+                                   "start",
+                                   "end",
+                                   x),
+                     col_types = c(seqnames = "-",
+                                   start = "-",
+                                   end = "-"))
+  
+  dam <- read_tsv(file.path(input_dir,
+                            gsub("LaminB1", "Dam", x)),
+                  show_col_types = F,
+                  col_names = c("seqnames",
+                                "start",
+                                "end",
+                                paste0(x, "_Dam")),
+                  col_types = c(seqnames = "-",
+                                start = "-",
+                                end = "-"))
+  
+  # combine
+  sample <- bind_cols(sample, dam)
+  
+  # and return
+  sample
+  
+}
+
+if (! file.exists(df.count_Tom2.file)) {
+  
+  # first, load bins
+  # add +1 to the start, as this was bed-based
+  bins <- read_tsv(file.path(input_dir,
+                             samples_Tom2.lmnb1[1]),
+                   col_names = c("seqnames",
+                                 "start",
+                                 "end")) %>%
+    dplyr::select(1:3) %>%
+    mutate(start = start + 1)
+  
+  # load counts
+  tib_count <- purrr::map(samples_Tom2.lmnb1,
+                           read_sample_and_dam) %>%
+    purrr::reduce(bind_cols)
+  
+  # combine the two
+  tib_count <- bind_cols(bins, tib_count)
+  
+  # convert to GRanges and set seqlevels
+  df.count_Tom2 <- as(tib_count, "GRanges")
+  
+  # Set seqlevels
+  seqlevels(df.count_Tom2, pruning = "coarse") <- c(paste0("chr", 1:22), "chrX")
+  seqlengths(df.count_Tom2) <- chrom_sizes[seqlevels(df.count_Tom2), "length"]
+  
+  saveRDS(df.count_Tom2, df.count_Tom2.file)
+  
+} else {
+  df.count_Tom2 <- readRDS(df.count_Tom2.file)
+}
+
+```
+
+        /DATA/scratch/usr/t.v.schaik/proj/sManzo_pADamID/ts210903_samples_Anna_pADamID_RPE/results/counts/bin-20kb/A549_61_LaminB2_R1-20kb.counts.txt.gz
+```{r}
+#I need the gene locations to count the data
+genes_Tom2<- import("/DATA/scratch/usr/t.v.schaik/data/gene_builds/GRCh38/gencode.v24.primary_assembly.annotation.gtf")
+genes_Tom2 <- genes_Tom2[genes_Tom2$type=="gene"]
+ 
+#Filter for protein coding genes_Tom2
+genes_Tom2<-genes_Tom2[genes_Tom2$gene_type == "protein_coding"]
+ 
+#filter for chromosomes
+genes_Tom2 <- genes_Tom2[seqnames(genes_Tom2) %in% c(paste0("chr", 1:22), "chrX")]
+ 
+#Set seqlevels
+seqlevels(genes_Tom2, pruning = "coarse") <- c(paste0("chr", 1:22),"chrX")
+seqlengths(genes_Tom2)<- chrom_sizes[seqlevels(genes_Tom2), "length"]
+ 
+#First extend the genes_Tom2
+genes_Tom2.query <- genes_Tom2
+mcols(genes_Tom2.query)<- NULL
+start(genes_Tom2.query)<- start(genes_Tom2.query) - ext
+end(genes_Tom2.query)<- end(genes_Tom2.query) + ext
+ 
+#Overlap genes_Tom2 with the counts
+ovl<-findOverlaps(genes_Tom2.query, df.count_Tom2)
+ 
+#Get the number of GATC fragment for every gene query
+mcols(genes_Tom2) [,"GATC_fragments"]<- 0
+t <- table(queryHits(ovl))
+mcols(genes_Tom2)[as.integer(names(t)), "GATC_fragments"] <- as.numeric(t)
+ 
+#Get the summed signal for every gene
+gene_Tom2.counts<- genes_Tom2
+mcols(gene_Tom2.counts) <-NULL
+#mcols(gene.counts)[, names(mcols(df.count_Tom2))]<-NA
+ 
+ 
+# Faster tibble/dtplyr implementation
+tib <- lazy_dt(as.tibble(ovl)) %>% #as_tibble()
+  rename_all(~ c("idx_genes_Tom2", "idx_gatc")) %>%
+  as_tibble()
+ 
+tib <- bind_cols(tib,
+                 as.tibble(mcols(df.count_Tom2[tib$idx_gatc]))) #as_tibble()
+ 
+tib_summarise <- tib %>%
+  gather(key, value, -contains("idx"))
+ 
+tib_summarise <- lazy_dt(tib_summarise) %>%
+  group_by(idx_genes_Tom2, key) %>%
+  summarise(count = sum(value)) %>%
+  ungroup() %>%
+  mutate(key = factor(key, levels = str_replace_all(names(mcols(df.count_Tom2)), "-", "."))) %>%
+  as.tibble() #as_tibble()
+ 
+tib_genes_Tom2 <- tib_summarise %>%
+  spread(key, count)
+ 
+mcols(gene_Tom2.counts) <- tib_genes_Tom2 %>%
+  dplyr::select(-idx_genes_Tom2)
+ 
+names(mcols(gene_Tom2.counts)) <- names(mcols(df.count_Tom2))
+saveRDS(genes_Tom2, genes_Tom2.file)
+saveRDS(gene_Tom2.counts, gene_Tom2.counts.file)
+```
+
+```{r}
+df.count_Tom2.file<- file.path(output_dir, "df_count_Tom2.rds")
+genes_Tom2.file<- file.path(output_dir, "genes_Tom2.rds")
+gene_Tom2.counts.file<- file.path(output_dir, "genes_Tom2_counts.rds")
+```
+
+```{r}
+
+df.counts_Tom2<-readRDS(df.count_Tom2.file)
+genes_Tom2<- readRDS(genes_Tom2.file)
+genes_Tom2.count<- readRDS(gene_Tom2.counts.file)
+```
+### 2) Normalize gene counts
+
+Next, we would like to normalize the gene counts for various parameters:
+
+  * Library size
+  * Lamina / Dam ratio
+  * More?
+  
+Absolute read filtering
+```{r}
+# To-do: filter genes_Tom2 for having too few reads?
+#        alternatively, filter for number of GATC fragments overlapping a gene?
+
+idx<- rowSums(as(mcols(genes_Tom2.count), "data.frame") >=10) >=2
+genes_Tom2.count <- genes_Tom2.count[idx]
+genes_Tom2 <- genes_Tom2[idx]
+```
+The library size
+```{r}
+library_size <- colSums(as(mcols(df.counts_Tom2), "data.frame"))
+library_size
+```
+
+```{r}
+# Also combined the counts (Dam + lamina) and have them separate
+genes_Tom2.count.combined<- genes_Tom2.count.lamina <- genes_Tom2.count.dam<- genes_Tom2.count
+mcols(genes_Tom2.count.combined) <- (as(mcols(genes_Tom2.count)[, seq(1, 2*n, 2)], "data.frame")+
+                                  as(mcols(genes_Tom2.count)[, seq(2, 2*n, 2)], "data.frame"))
+mcols(genes_Tom2.count.lamina) <-mcols(genes_Tom2.count)[,seq(1, 2*n,2)]
+mcols(genes_Tom2.count.dam) <-mcols(genes_Tom2.count)[,seq(2, 2*n,2)]
+
+#Normalize to 1 M reads
+norm_factor <- library_size/ 1e6
+genes_Tom2.count.norm<- genes_Tom2.count
+mcols(genes_Tom2.count.norm)<- t(t(as(mcols(genes_Tom2.count), "data.frame"))/ norm_factor)
+
+#Also create a 1M mean counts of Dam and Lamina per experiment
+genes_Tom2.count.norm.combined<- genes_Tom2.count.norm
+mcols(genes_Tom2.count.norm.combined) <- (as(mcols(genes_Tom2.count.norm) [,seq(1, 2*n, 2)], "data.frame")+
+                                      as(mcols(genes_Tom2.count.norm) [,seq(2, 2*n, 2)], "data.frame")) /2
+```
+
+```{r}
+# Normalize Lamina over Dam function (ratio2)
+NormalizeDamID <- function(df, pseudo = 1) {
+  # This function expects a data frame that is composed of lamina and Dam-only
+  # columns, in that order. It simply determines the log2 ratio of the two for
+  # every pair of columns. A pseudocount is added to prevent problems.
+  n <- ncol(df)
+  df.norm <- log2((df[, seq(1, n-1, 2)] + pseudo) / (df[, seq(2, n, 2)] + pseudo))
+  df.norm
+}
+
+#Normalize LB over Dam (ratio2)
+genes_Tom2.norm <- genes_Tom2.count
+mcols(genes_Tom2.norm) <- NormalizeDamID(as(mcols(genes_Tom2.count.norm), "data.frame"))
+mcols(genes_Tom2.norm) <- mcols(genes_Tom2.norm)[, samples_Tom2$sample]
+```
+
+
+```{r}
+# Plot the distributions for the various samples_Tom2 This does not work
+#plot(1, 1, type = "n", xlim = c(-6, 4), ylim = c(0, 0.6),
+#     xlab = "Dam-ratio (log2)", ylab = "density", main = "Density Dam ratio for genes_Tom2")
+
+#for (i in 1:n) {
+ # lines(density(mcols(genes_Tom2.norm)[, i],na.rm = TRUE,), col = samples_Tom2, lwd = 2,
+  #      lty = as.numeric(samples_Tom2.df$integration[i]),)
+#}
+
+#legend("topright", legend = levels(samples_Tom2), 
+    #   pch = 19, col = 1:length(levels(samples_Tom2)))
+```
+
+```{r}
+#Scale the data to the same mean and stdev
+genes_Tom2.norm.scaled<-genes_Tom2.norm
+mcols(genes_Tom2.norm.scaled)<- scale(as(mcols(genes_Tom2.norm.scaled), "data.frame"))
+```
+
+```{r}
+# Save files as RDS
+saveRDS(samples_Tom2, file.path(output_dir, "samples_Tom2.rds"))
+saveRDS(genes_Tom2.norm.scaled, file.path(output_dir, "genes_Tom2_norm_filtered.rds"))
+
+# First, change the mcols of the genes_Tom2
+mcols(genes_Tom2) <- mcols(genes_Tom2)[, c("gene_id", "gene_name", "GATC_fragments")]
+saveRDS(genes_Tom2, file.path(output_dir, "genes_Tom2_filtered.rds"))
+```
+
+```{r}
+# samples_Tom2 data frame - basically metadata
+padamid.samples_Tom2<- readRDS(file.path(output_dir,
+                                    "samples_Tom2.rds"))
+
+# Filtered genes_Tom2 used in the pA-DamID analysis
+padamid.genes_Tom2 <- readRDS(file.path(output_dir, 
+                                   "genes_Tom2_filtered.rds"))
+
+# Data frame with per-gene information on differential analysis
+#padamid.results <- readRDS(file.path(output_dir,
+                                    #  "Differential_score.rds"))
+padamid.norm <- readRDS(file.path(output_dir,
+                                  "genes_Tom2_norm_filtered.rds"))
+
+names(mcols(padamid.norm))<-padamid.samples_Tom2$samples_Tom2
+
+class(padamid.norm)
+#class(padamid.results)
+class(padamid.genes_Tom2)
+class(padamid.samples_Tom2)
+
+padamid_norm_df<- as(mcols(padamid.norm), "data.frame") 
+padamid_genes_Tom2_df<- as(mcols(padamid.genes_Tom2), "data.frame")
+#binding gene name and danID score
+damid_score_gene_Tom2<-cbind(padamid_genes_Tom2_df, padamid_norm_df)
+
+damid_score_gene_Tom_LB1_LB2<-inner_join(damid_score_gene_Tom,damid_score_gene_Tom2, by="gene_name")
+
+damid_score_gene_Tom_LB1_LB2<-damid_score_gene_Tom_LB1_LB2[,-(83:84)]
+```
+
+```{r}
+Taxol_damid_score_gene_Tom<-damid_score_gene_Tom_LB1_LB2 %>%
+                        mutate(RPE_dPC3_TXR3_LB2=(`RPE_dPC3_TXR3_LaminB2_R1-gatc.counts.txt.gz`+                                   `RPE_dPC3_TXR3_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+                        mutate(RPE_dPC3_TXR4_LB2=(`RPE_dPC3_TXR4_LaminB2_R1-gatc.counts.txt.gz`+                                   `RPE_dPC3_TXR4_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+                        mutate(RPE_dPC3_WT_LB2=(`RPE_dPC3_WT_LaminB2_R1-gatc.counts.txt.gz`+                                        `RPE_dPC3_WT_LaminB2_R2-gatc.counts.txt.gz`)/2)%>% 
+                        mutate(RPE_dPC3_WT_LB1=(`RPE_dPC3_WT_LaminB1_R3-gatc.counts.txt.gz`+                                        `RPE_dPC3_WT_LaminB1_R4-gatc.counts.txt.gz`)/2)%>% 
+                        mutate(RPE_dPC3Mi_TXR_LB1=(`RPE_dPC3Mi_TxR_s20_LaminB1_R1-gatc.counts.txt.gz`+                                   `RPE_dPC3Mi_TxR_s20_LaminB1_R2-gatc.counts.txt.gz`)/2)%>%
+                        mutate(RPE_iCut_5AZA_62_5_LB2=(`RPE_iCut_5AZA_62_5_LaminB2_R1-gatc.counts.txt.gz`+                                   `RPE_iCut_5AZA_62_5_LaminB2_R2-gatc.counts.txt.gz`)/2)%>% 
+      mutate(RPE_iCut_ANCHOR3_clone7_DMSO_LB2=(`RPE_iCut_ANCHOR3_clone7_DMSO_LaminB2_R1-gatc.counts.txt.gz`+                            `RPE_iCut_ANCHOR3_clone7_DMSO_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_ANCHOR3_clone7_TXR_LB2=(`RPE_iCut_ANCHOR3_clone7_TXR_LaminB2_R1-gatc.counts.txt.gz`+                            `RPE_iCut_ANCHOR3_clone7_TXR_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_ANCHOR3_polyclonal_LB2=(`RPE_iCut_ANCHOR3_polyclonal_LaminB2_R1-gatc.counts.txt.gz`+                            `RPE_iCut_ANCHOR3_polyclonal_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_BIX_2_LB2=(`RPE_iCut_BIX_2_LaminB2_R1-gatc.counts.txt.gz`+                          
+                                  `RPE_iCut_BIX_2_LaminB2_R3-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_DMSO_LB2=(`RPE_iCut_DMSO_LaminB2_R1-gatc.counts.txt.gz`+                            
+                                  `RPE_iCut_DMSO_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_GSK126_500_LB2=(`RPE_iCut_GSK126_500_LaminB2_R1-gatc.counts.txt.gz`+                                                              `RPE_iCut_GSK126_500_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_LBRKO_LB2=(`RPE_iCut_LBRKO_LaminB2_R1-gatc.counts.txt.gz`+                                                              `RPE_iCut_LBRKO_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_LMNAKO_LB2=(`RPE_iCut_LMNAKO_LaminB2_R1-gatc.counts.txt.gz`+                                                              `RPE_iCut_LMNAKO_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_LMNB1KO_LB2=(`RPE_iCut_LMNB1KO_LaminB2_R1-gatc.counts.txt.gz`+                                                              `RPE_iCut_LMNB1KO_LaminB2_R2-gatc.counts.txt.gz`)/2)%>%
+      mutate(RPE_iCut_WT_LB2=(`RPE_iCut_WT_LaminB2_R3-gatc.counts.txt.gz`+                                                              `RPE_iCut_WT_LaminB2_R4-gatc.counts.txt.gz`)/2)
+
+ABCB1<-Taxol_damid_score_gene_Tom%>%filter(gene_name=="ABCB1")
+```
+
+
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_BIX_treatment.pdf")
+Taxol_damid_score_gene_Tom%>% ggplot(., aes(x= RPE_iCut_DMSO_LB2, y= RPE_iCut_BIX_2_LB2))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("Bix treatment,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE_iCut_DMSO_LB2, y= RPE_iCut_BIX_2_LB2), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+#dev.off()
+
+
+```
+
+
+
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_GSK_treatment.pdf")
+Taxol_damid_score_gene_Tom %>% ggplot(., aes(x= RPE_iCut_DMSO_LB2, y= RPE_iCut_GSK126_500_LB2))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("GSK treatment,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE_iCut_DMSO_LB2, y= RPE_iCut_GSK126_500_LB2), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+#dev.off()
+
+
+
+```
+
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_AZA_treatment.pdf")
+Taxol_damid_score_gene_Tom %>% ggplot(., aes(x= RPE_iCut_DMSO_LB2, y= RPE_iCut_5AZA_62_5_LB2))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("AZA treatment,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE_iCut_DMSO_LB2, y= RPE_iCut_5AZA_62_5_LB2), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+#dev.off()
+
+```
+
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_LBRKO.pdf")
+Taxol_damid_score_gene_Tom %>% ggplot(., aes(x= RPE_iCut_WT_LB2, y= RPE_iCut_LBRKO_LB2))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("LBRKO,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE_iCut_WT_LB2, y= RPE_iCut_LBRKO_LB2), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+#dev.off()
+```
+
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_LMNAKO.pdf")
+Taxol_damid_score_gene_Tom %>% ggplot(., aes(x= RPE_iCut_WT_LB2, y= RPE_iCut_LMNAKO_LB2))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("LMNAKO,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE_iCut_WT_LB2, y= RPE_iCut_LMNAKO_LB2), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+#dev.off()
+```
+
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_LMNB1KO.pdf")
+Taxol_damid_score_gene_Tom %>% ggplot(., aes(x= RPE_iCut_WT_LB2, y= RPE_iCut_LMNB1KO_LB2))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("LMNB1KO,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE_iCut_WT_LB2, y= RPE_iCut_LMNB1KO_LB2), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+#dev.off()
+```
+
+
+
+Let's bind old and new data
+
+```{r}
+Taxol_damid_score_gene_merge<-inner_join(Taxol_damid_score_gene_Tom, Taxol_damid_score_gene, by="gene_name")
+```
+Let's focus on RPE20 the first TXR selected clone
+First scatter lot according to the original control
+
+```{r}
+ABCB1<-Taxol_damid_score_gene_merge%>%filter(gene_name=="ABCB1")
+
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_dPC3WTvsTXR_s20.pdf")
+Taxol_damid_score_gene_merge %>% ggplot(., aes(x= RPE_dPC3_WT_LB1, y= RPE_dPC3Mi_TXR_LB1))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("TXR_s20 vs dPC3,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes(x= RPE_dPC3_WT_LB1, y= RPE_dPC3Mi_TXR_LB1), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+#dev.off()
+```
+Now according to Anna the original parental control for TXR_s20 (or RPOE20) is
+RPE0. This dataset has LB2 data and not LB1, but let see how it looks.
+
+```{r}
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Scatter_Plot_RPE0vsTXR_s20.pdf")
+Taxol_damid_score_gene_merge %>% ggplot(., aes(x= RPE0, y= RPE_dPC3Mi_TXR_LB1))+ rasterize(geom_point(alpha=0.1, size=0.3), dpi=300) + stat_cor(method = "pearson", label.x = -2, label.y= 2.2) +ggtitle("TXR_s20 vs RPE0,ABCB1, 20 kb_bins")+ theme_bw()+ geom_abline()+ geom_point(data=ABCB1, aes( x= RPE0, y= RPE_dPC3Mi_TXR_LB1), color="red", size=2)+geom_text(data=ABCB1,aes(label=gene_name ),color="black", hjust=0, vjust=1.5)
+#dev.off()
+```
+Now let's calculate the delta for all TXR vs relative control
+
+```{r}
+Taxol_damid_score_gene_merge <-Taxol_damid_score_gene_merge%>%
+              dplyr::mutate(Delta_TXRs20=RPE_dPC3Mi_TXR_LB1-RPE_dPC3_WT_LB1)%>%
+              dplyr::mutate(Delta_TXR3=TXR3-DPURO_3)%>%
+              dplyr::mutate(Delta_TXR4=TXR4-DPURO_3)%>%
+              dplyr::mutate(Delta_TXR5=TXR5-RPE0)%>%
+              dplyr::mutate(Delta_TXR6=TXR6-RPE0)%>%
+              dplyr::mutate(Delta_ANCHOR_P_TXR=ANCHOR_P_TXR-ANCHOR_P)%>%
+              dplyr::mutate(Delta_ANCHOR_c7_TXR=ANCHOR_c7_TXR_r1-ANCHOR_c7_r1)
+              
+            
+```
+
+```{r}
+ABCB1_delta<-Taxol_damid_score_gene_merge%>%filter(gene_name=="ABCB1")%>%select(gene_name,Delta_TXRs20,Delta_TXR3,Delta_TXR4, Delta_TXR5, Delta_TXR6, Delta_ANCHOR_P_TXR, Delta_ANCHOR_c7_TXR)
+
+
+
+ABCB1_delta_gathered<-ABCB1_delta%>%gather(Delta_TXRs20,Delta_TXR3,Delta_TXR4, Delta_TXR5, Delta_TXR6, Delta_ANCHOR_P_TXR, Delta_ANCHOR_c7_TXR,key ="Clone", value = "Delta")
+t.test(ABCB1_delta_gathered$Delta, alternative = "less")
+
+p_val <- 0.009309
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Detachment_score_allclones.pdf")
+ABCB1_delta%>%gather(Delta_TXRs20,Delta_TXR3,Delta_TXR4, Delta_TXR5, Delta_TXR6, Delta_ANCHOR_P_TXR, Delta_ANCHOR_c7_TXR,key ="Clone", value = "Delta")%>%ggplot(., aes(x=gene_name, y=Delta, color=Clone))+geom_beeswarm()+geom_hline(yintercept = 0,  linetype=2)+ylab("Detachment score")+theme_bw()+ ylim(-2.5,0.5)+ annotate("text",x=1,y=0.3,label=paste0('atop(bold("p = ',p_val,'"))'),cex=4,parse=TRUE)
+#dev.off()
+```
+
+
+
+```{r}
+All_corr<-Taxol_damid_score_gene_merge%>%
+        dplyr::select(`RPE_dPC3_TXR3_LaminB2_R1-gatc.counts.txt.gz`,`RPE_dPC3_TXR3_LaminB2_R2-gatc.counts.txt.gz`,
+                      `RPE_dPC3_TXR4_LaminB2_R1-gatc.counts.txt.gz`,`RPE_dPC3_TXR4_LaminB2_R2-gatc.counts.txt.gz`,
+                      `RPE_dPC3_TXR4_LaminB2_R2-gatc.counts.txt.gz`,`RPE_dPC3_WT_LaminB2_R1-gatc.counts.txt.gz`,
+                      `RPE_iCut_5AZA_62_5_LaminB2_R1-gatc.counts.txt.gz`,`RPE_iCut_5AZA_62_5_LaminB2_R2-gatc.counts.txt.gz`,
+                      `RPE_iCut_BIX_2_LaminB2_R1-gatc.counts.txt.gz`,`RPE_iCut_BIX_2_LaminB2_R2-gatc.counts.txt.gz`, 
+                      `RPE_iCut_DMSO_LaminB2_R1-gatc.counts.txt.gz`,`RPE_iCut_DMSO_LaminB2_R2-gatc.counts.txt.gz`,
+                      `RPE_iCut_GSK126_500_LaminB2_R1-gatc.counts.txt.gz`,`RPE_iCut_GSK126_500_LaminB2_R2-gatc.counts.txt.gz`,
+                      `RPE_iCut_LMNAKO_LaminB2_R1-gatc.counts.txt.gz`,`RPE_iCut_LMNAKO_LaminB2_R2-gatc.counts.txt.gz`,
+                      `RPE_iCut_LMNB1KO_LaminB2_R1-gatc.counts.txt.gz`,`RPE_iCut_LMNB1KO_LaminB2_R2-gatc.counts.txt.gz`,
+                      `RPE_dPC3Mi_TxR_s20_LaminB1_R1-gatc.counts.txt.gz`,`RPE_dPC3Mi_TxR_s20_LaminB1_R2-gatc.counts.txt.gz`,
+                      `pADamID-DPURO3_r1_Lmnb2-gatc.counts.txt.gz`,`pADamID-DPURO3_r2_Lmnb2-gatc.counts.txt.gz`,
+                      `ANCHOR_c7_r1`,`ANCHOR_c7_TXR_r1`,
+                      `pADamID-iCA3P_r1_Lmnb2-gatc.counts.txt.gz`,`pADamID-iCA3P_r2_Lmnb2-gatc.counts.txt.gz`,              
+                      `pADamID-iCA3P_TXR_r1_Lmnb2-gatc.counts.txt.gz`, `pADamID-iCA3P_TXR_r2_Lmnb2-gatc.counts.txt.gz`,                              `pADamID-RPE0_r1_Lmnb2-gatc.counts.txt.gz`, `pADamID-RPE0_r2_Lmnb2-gatc.counts.txt.gz`,              
+                      `pADamID-TXR3_r1_Lmnb2-gatc.counts.txt.gz`, `pADamID-TXR3_r2_Lmnb2-gatc.counts.txt.gz`,           
+                      `pADamID-TXR4_r1_Lmnb2-gatc.counts.txt.gz`, `pADamID-TXR4_r2_Lmnb2-gatc.counts.txt.gz`,                                        `pADamID-TXR5_r1_Lmnb2-gatc.counts.txt.gz`,`pADamID-TXR5_r2_Lmnb2-gatc.counts.txt.gz`,                                         `pADamID-TXR6_r1_Lmnb2-gatc.counts.txt.gz`,`pADamID-TXR6_r2_Lmnb2-gatc.counts.txt.gz`,`RPE_CRISPRa_ABCB1_LaminB1_R1-gatc.counts.txt.gz`,`RPE_CRISPRa_ABCB1_LaminB1_R2-gatc.counts.txt.gz`, `RPE_CRISPRa_ABCB4_LaminB1_R1-gatc.counts.txt.gz`, `RPE_CRISPRa_ABCB4_LaminB1_R2-gatc.counts.txt.gz`,`RPE_CRISPRa_combo_LaminB1_R1-gatc.counts.txt.gz`,    `RPE_CRISPRa_combo_LaminB1_R2-gatc.counts.txt.gz`,`RPE_CRISPRa_RUNCD3B_LaminB1_R1-gatc.counts.txt.gz`,`RPE_CRISPRa_RUNCD3B_LaminB1_R2-gatc.counts.txt.gz`,`RPE_CRISPRa_WT_LaminB1_R1-gatc.counts.txt.gz`,   `RPE_CRISPRa_WT_LaminB1_R2-gatc.counts.txt.gz`)%>%
+  cor()
+
+All_corr_df<-as.data.frame(All_corr)
+write.csv2(All_corr_df,"/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Allcorrelation.csv", row.names = TRUE)
+
+require(pheatmap)
+require(RColorBrewer)
+
+#pdf("/DATA/usr/s.manzo/Projects/SGM20220704_pA_DamID_seq_AnnaB5_NewABCB1_clones/pdf/Allcorrelation.pdf")
+pheatmap(All_corr)
+#dev.off()
+```
+
+
+```{r}
+#A <- matrix(rnorm(25, 0, 5), nrow = 5, ncol = 5)  
+#print(A)
+  
+# Plot a heatmap 
+#heatmap(A,Rowv=NA,Colv=NA,col=heat.colors(3))
+  
+# Plot a corresponding legend
+#legend(x="right", legend=c("min", "med", "max"),fill=heat.colors(3))
+```
+
+
+
+

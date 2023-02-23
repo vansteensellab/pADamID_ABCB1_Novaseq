@@ -1,0 +1,171 @@
+###############################################################################
+## snakemake config - damid pipeline ##########################################
+###############################################################################
+## Tom van Schaik
+## 171120
+## version 1.3
+
+# Introduction snakemake:
+# Snakemake is a bioinformatics pipeline tool written in python. It follows the 
+# 'make'-logic: you determine rules with which files can be generated, and 
+# which input files these require. Snakemake will try to execute the first rule
+# given, and execute other rules based on the input the final rule requires. 
+# In this way, you have a pipeline. 
+# Some cool features of snakemake:
+# - You give input and output file names, and snakemake will do the rest.
+# - If a rule gives an error, the output file is automatically removed, to 
+#   prevent "partial" data files.
+# - Given a number of cores to snakemake, it will automatically parallelize 
+#   things when possible. 
+# - You can create a fancy workflow overview picture.
+
+# This is the config file for a damid snakemake pipeline, where you list 
+# parameters which will be used in the pipeline.
+
+# Versions:
+# 1.0 - Initial version
+# 1.1 - Updated pipeline
+# 1.2 - Added replicates + changed basename scheme
+# 1.3 - Changed mapping to bwa mem for 4DN compatibility
+
+###############################################################################
+### Parameters and file locations #############################################
+###############################################################################
+
+# FastQC
+conda_fastqc: /home/t.v.schaik/mydata/proj/tests/results/ts220124_test_processing_novaseq/bin/fastqc/conda_fastqc.yaml
+
+# Parsing
+read_parser: bin/read_parser/read_parser.py
+read_structure: bin/read_parser/read_structure.txt
+conda_parser: /home/t.v.schaik/mydata/proj/tests/results/ts220124_test_processing_novaseq/bin/read_parser/conda_parser.yaml
+
+# Mapping
+mapper: bin/mapping/mapping_bwa.sh
+genome_index: /DATA/scratch/usr/t.v.schaik/data/genomes/mm10/ENCODE/mm10_no_alt_analysis_set_ENCODE
+conda_mapping: /home/t.v.schaik/mydata/proj/tests/results/ts220124_test_processing_novaseq/bin/mapping/conda_mapping.yaml
+
+# Counting
+gatc_counting: bin/gatc_counting/gatc_counting_mm10.R
+gatc_gff: /DATA/scratch/usr/t.v.schaik/data/genomes/mm10/ENCODE/mm10_no_alt_analysis_set_ENCODE_gatc_fragments.gff
+#bins: "5,10,20,25,50,100"
+bins: "100,500,1000,5000"
+
+# Normalizing
+normalize_damid: bin/normalization/normalize_damid.R
+normalize_method: dam-log2
+pseudo: 1
+combine_replicates: bin/normalization/combine_replicates.R
+
+# Tracks
+bed2bigwig: bin/data_tracks/bed2BigWig.R
+chrom_sizes: /DATA/scratch/usr/t.v.schaik/data/genomes/mm10/mm10.chrom.sizes
+
+# HMM
+hmm_calling: "bin/HMM_calling/HMM.R"
+
+# File report - the locations should be relative from the snakemake file
+report_relative_location: "./"    # required for previous versions of snakemake
+file_report: "../../bin/reports/experiment_statistics_mm10.Rmd"
+replicate_report: "../../bin/reports/replicate_statistics.Rmd"
+#centromeres_bed: "bin/reports/ts171110_hg38_centromeres.bed.gz"
+
+# Statistics
+gather_statistics: "bin/statistics/gather_statistics.R"
+merge_statistics: "bin/statistics/merge_statistics.R"
+
+# Multiqc
+conda_multiqc: /home/t.v.schaik/mydata/proj/tests/results/ts220124_test_processing_novaseq/bin/multiqc/conda_multiqc.yaml
+
+###############################################################################
+### Input and output ##########################################################
+###############################################################################
+
+# Note #1: use spaces instead of tabs for some reason!
+
+# Output directories
+output_dir: "results_mm10"
+
+out_fastqc: fastqc
+out_fastqc_parsed: fastqc_parsed
+out_parse: parsed
+out_map: mapped
+out_count: counts
+out_norm: normalized
+out_tracks_norm: tracks/normalized
+out_tracks_counts: tracks/counts
+out_hmm: "HMM"
+out_report_experiment: "reports/experiment"
+out_report_replicate: "reports/replicate"
+out_statistics: statistics
+out_multiqc: multiqc
+
+
+# Basename target to basename dam-only control list
+basenames:
+
+  #####################################
+  ### Test ############################
+  #####################################
+
+  # ts220420 - MiSeq Nano test data
+  method_1_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_1_1_Dam_TTGCAATGCG-TGAAGTCTCG_S2_R1_001.fastq.gz
+  method_1_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_2_1_LB1_AACCGGCCTT-GATCTGAACA_S5_R1_001.fastq.gz
+  method_2_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_3_2_Dam_CATTATCGCT-AAGCAACTCG_S4_R1_001.fastq.gz
+  method_2_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_4_2_LB1_CATTGAGCTA-GATGTGAAGT_S8_R1_001.fastq.gz
+  method_3_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_5_3_Dam_AACCACACTA-TCAGCAGAGG_S9_R1_001.fastq.gz
+  method_3_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_6_3_LB1_GTACAGCGGA-ACACAGATTG_S7_R1_001.fastq.gz
+  method_4_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_7_4_Dam_CAACCATACA-TATAACCGGT_S10_R1_001.fastq.gz
+  method_4_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_8_4_LB1_ACTGGCAAGA-ATGGACAACA_S11_R1_001.fastq.gz
+  method_5_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_9_5_Dam_ACAAGAACCT-TTCAGTATCG_S12_R1_001.fastq.gz
+  method_5_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_10_5_LB1_GATCAACAAG-GACAGTGCTT_S1_R1_001.fastq.gz
+  method_6_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_11_6_Dam_ACCTTCGGAC-ATCTACGGTC_S3_R1_001.fastq.gz
+  method_6_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_12_6_LB1_TCTTAGGTGG-ACCAGTGATC_S6_R1_001.fastq.gz
+  method_7_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_13_7_Dam_TCGACGTTGG-CACACTTATC_S13_R1_001.fastq.gz
+  method_7_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_14_7_LB1_GACAATTAGC-TCATGACCGG_S14_R1_001.fastq.gz
+  method_8_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_15_8_Dam_TTCTACCGGC-CTTACGAGTA_S15_R1_001.fastq.gz
+  method_8_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_16_8_LB1_TGACAAGAGG-CCAACAGATT_S16_R1_001.fastq.gz
+  method_9_Dam:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_17_9_Dam_TGTTCGCTCT-ACACGCAAGT_S17_R1_001.fastq.gz
+  method_9_LB1:
+    - /shared/gcf/r.schep/6830/fastq_files/6830_18_9_LB1_CACGTAAGAG-CGCGGATTGA_S18_R1_001.fastq.gz
+
+
+
+# Bam control list, using basenames only
+dam_controls:
+
+  # Test data
+  method_1_LB1: method_1_Dam
+  method_2_LB1: method_2_Dam
+  method_3_LB1: method_3_Dam
+  method_4_LB1: method_4_Dam
+  method_5_LB1: method_5_Dam
+  method_6_LB1: method_6_Dam
+  method_7_LB1: method_7_Dam
+  method_8_LB1: method_8_Dam
+  method_9_LB1: method_9_Dam
+
+
+# Replicate experiments
+replicates:
+
+  {}
+
+  

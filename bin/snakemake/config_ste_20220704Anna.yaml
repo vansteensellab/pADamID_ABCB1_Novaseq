@@ -1,0 +1,268 @@
+###############################################################################
+## snakemake config - damid pipeline ##########################################
+###############################################################################
+## Tom van Schaik
+## 171120
+## version 1.4
+
+# Introduction snakemake:
+# Snakemake is a bioinformatics pipeline tool written in python. It follows the 
+# 'make'-logic: you determine rules with which files can be generated, and 
+# which input files these require. Snakemake will try to execute the first rule
+# given, and execute other rules based on the input the final rule requires. 
+# In this way, you have a pipeline. 
+# Some cool features of snakemake:
+# - You give input and output file names, and snakemake will do the rest.
+# - If a rule gives an error, the output file is automatically removed, to 
+#   prevent "partial" data files.
+# - Given a number of cores to snakemake, it will automatically parallelize 
+#   things when possible. 
+# - You can create a fancy workflow overview picture.
+
+# This is the config file for a damid snakemake pipeline, where you list 
+# parameters which will be used in the pipeline.
+
+# Versions:
+# 1.0 - Initial version
+# 1.1 - Updated pipeline
+# 1.2 - Added replicates + changed basename scheme
+# 1.3 - Changed mapping to bwa mem for 4DN compatibility
+# 1.4 - Added 3' adapter read trimming and fastqc / multiqc reports (for novaseq)
+
+###############################################################################
+### Parameters and file locations #############################################
+###############################################################################
+
+# FastQC
+conda_fastqc: /home/t.v.schaik/mydata/proj/tests/results/ts220124_test_processing_novaseq/bin/fastqc/conda_fastqc.yaml
+
+# Parsing
+read_parser: bin/read_parser/read_parser.py
+read_structure: bin/read_parser/read_structure_directligation.txt
+conda_parser: /home/t.v.schaik/mydata/proj/tests/results/ts220124_test_processing_novaseq/bin/read_parser/conda_parser.yaml
+
+# Mapping
+mapper: bin/mapping/mapping_bwa.sh
+genome_index: /home/t.v.schaik/mydata/data/genomes/GRCh38/ENCODE/GRCh38_rDNA
+conda_mapping: /home/t.v.schaik/mydata/proj/tests/results/ts220124_test_processing_novaseq/bin/mapping/conda_mapping.yaml
+
+# Counting
+gatc_counting: bin/gatc_counting/gatc_counting.R
+gatc_gff: /home/t.v.schaik/mydata/data/genomes/GRCh38/ENCODE/GRCh38_gatc_fragments.gff
+bins: "5,10,20,80"
+#bins: "100,500,1000,5000"
+
+# Normalizing
+normalize_damid: bin/normalization/normalize_damid.R
+normalize_method: dam-log2
+pseudo: 1
+combine_replicates: bin/normalization/combine_replicates.R
+
+# Tracks
+bed2bigwig: bin/data_tracks/bed2BigWig.R
+chrom_sizes: /home/t.v.schaik/mydata/data/genomes/GRCh38/hg38.chrom.sizes
+
+# HMM
+hmm_calling: "bin/HMM_calling/HMM.R"
+
+# File report - the locations should be relative from the snakemake file
+report_relative_location: "./"    # required for previous versions of snakemake
+file_report: "../../bin/reports/experiment_statistics.Rmd"
+replicate_report: "../../bin/reports/replicate_statistics.Rmd"
+centromeres_bed: "bin/reports/ts171110_hg38_centromeres.bed.gz"
+
+# Statistics
+gather_statistics: "bin/statistics/gather_statistics.R"
+merge_statistics: "bin/statistics/merge_statistics.R"
+
+# Multiqc
+conda_multiqc: /home/t.v.schaik/mydata/proj/tests/results/ts220124_test_processing_novaseq/bin/multiqc/conda_multiqc.yaml
+
+###############################################################################
+### Input and output ##########################################################
+###############################################################################
+
+# Note #1: use spaces instead of tabs for some reason!
+
+# Output directories
+output_dir: "results"
+
+out_fastqc: fastqc
+out_fastqc_parsed: fastqc_parsed
+out_parse: parsed
+out_map: mapped
+out_count: counts
+out_norm: normalized
+out_tracks_norm: tracks/normalized
+out_tracks_counts: tracks/counts
+out_hmm: "HMM"
+out_report_experiment: "reports/experiment"
+out_report_replicate: "reports/replicate"
+out_statistics: statistics
+out_multiqc: multiqc
+
+
+# Basename target to basename dam-only control list
+basenames:
+#2022-07-04
+  #Anna new ABCB1 clones,two replicates
+  
+  pADamID-RPE0_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_1_pA-DamID_RPE0_DAM_A_TCCAGCGAAG-GTTCTATGTC_S2_R1_001.fastq.gz
+  pADamID-RPE0_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_2_pA-DamID_RPE0_LB2_A_GTACTAAGAG-CGCTCTAGAT_S5_R1_001.fastq.gz
+  pADamID-DPURO3_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_3_pA-DamID_D_PURO3_DAM_A_GTCTTCTCGA-TGGTGCCAAC_S4_R1_001.fastq.gz
+  pADamID-DPURO3_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_4_pA-DamID_D_PURO3_LB2_A_ATACACAGAG-AGTCAGAAGG_S8_R1_001.fastq.gz
+  pADamID-TXR3_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_5_pA-DamID_TXR3-DAM_A_AGGTCTATGG-CCGTGAGAAC_S9_R1_001.fastq.gz
+  pADamID-TXR3_r1_Lmnb2:
+    - /shared/gcf/r.schep/6940/fastq_files/6940_72_pA-DamID_TXR-LB2_A_TATGATGCAG-AGGCCAGTTG_S72_R1_001.fastq.gz
+  pADamID-TXR4_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_7_pA-DamID_TXR4-DAM_A_CGTGGCAGAA-TCTTCCGATG_S12_R1_001.fastq.gz
+  pADamID-TXR4_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_8_pA-DamID_TXR4-LB2_A_CAACAGGTAG-GACGATAGTG_S13_R1_001.fastq.gz
+  pADamID-TXR5_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_9_pA-DamID_TXR5-DAM_A_TGATTCCACA-CTCTAGCCGT_S14_R1_001.fastq.gz
+  pADamID-TXR5_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_10_pA-DamID_TXR5-LB2_A_TAAGGCGATC-GTTAGCACAA_S11_R1_001.fastq.gz
+  pADamID-TXR6_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_11_pA-DamID_TXR6-DAM_A_AATCCAGGAT-CATGCAGAGT_S17_R1_001.fastq.gz
+  pADamID-TXR6_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_12_pA-DamID_TXR6-LB2_A_AAGGTACCGT-CTGATCTTGT_S18_R1_001.fastq.gz
+  pADamID-iCA3P_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_13_pA-DamID_iCA3_P_DAM_A_ACGACAATGA-AACGCGGTAG_S19_R1_001.fastq.gz
+  pADamID-iCA3P_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_14_pA-DamID_iCA3_P_LB2_A_TGCGTTCTGC-TTGGTCGCTC_S20_R1_001.fastq.gz
+  pADamID-iCA3P_TXR_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_15_pA-DamID_iCA3_P_TXR_DAM_A_CATTGAGCTA-ACTTCACATC_S16_R1_001.fastq.gz
+  pADamID-iCA3P_TXR_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_16_pA-DamID_iCA3_P_TXR_LB2_A_CTTCGGAATC-CGTCGGTAAG_S26_R1_001.fastq.gz
+  pADamID-iCA3_c7_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_17_pA-DamID_iCA3_c7_DAM_A_AACCACACTA-CCTCTGCTGA_S25_R1_001.fastq.gz
+  pADamID-iCA3_c7_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_18_pA-DamID_iCA3_c7_LB2_A_GTACAGCGGA-CAATCTGTGT_S23_R1_001.fastq.gz
+  pADamID-iCA3_c7_TXR_r1_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_19_pA-DamID_iCA3_c7_TXR_DAM_A_ACTTCAACAG-GCGTGAGCAT_S24_R1_001.fastq.gz
+  pADamID-iCA3_c7_TXR_r1_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_20_pA-DamID_iCA3_c7_TXR_LB2_A_TGGACAATAG-GAGTCCTGTG_S22_R1_001.fastq.gz
+  pADamID-RPE0_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_21_pA-DamID_RPE0_DAM_B_TCACACGGAT-CTTCTGATCG_S1_R1_001.fastq.gz
+  pADamID-RPE0_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_22_pA-DamID_RPE0_LB2_B_AGGATACGGT-AACCACGTCA_S3_R1_001.fastq.gz
+  pADamID-DPURO3_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_23_pA-DamID_D_PURO3_DAM_B_GCTACAGGTC-TTATGCAGGA_S6_R1_001.fastq.gz
+  pADamID-DPURO3_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_24_pA-DamID_D_PURO3_LB2_B_GCCAAGTAAC-TGCGTGATGA_S30_R1_001.fastq.gz
+  pADamID-TXR3_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_25_pA-DamID_TXR3-DAM_B_TTGTGAAGGC-TCGTCAGTAC_S10_R1_001.fastq.gz
+  pADamID-TXR3_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_26_pA-DamID_TXR3-LB2_B_GTCGACTCCT-TGCCGTTAGC_S29_R1_001.fastq.gz
+  pADamID-TXR4_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_27_pA-DamID_TXR4-DAM_B_CTGAGCTTGT-CTTCTTGCGT_S28_R1_001.fastq.gz
+  pADamID-TXR4_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_28_pA-DamID_TXR4-LB2_B_CCTCTGTCAT-CGTATCGATT_S15_R1_001.fastq.gz
+  pADamID-TXR5_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_29_pA-DamID_TXR5-DAM_B_GCAGATGTAA-TACACGCCTC_S31_R1_001.fastq.gz
+  pADamID-TXR5_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_30_pA-DamID_TXR5-LB2_B_CTCATCATCT-TAAGCCTCTA_S32_R1_001.fastq.gz
+  pADamID-TXR6_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_31_pA-DamID_TXR6-DAM_B_CGAGTTCGCA-CCGGATTATG_S21_R1_001.fastq.gz
+  pADamID-TXR6_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_32_pA-DamID_TXR6-LB2_B_TCCTACGTGC-TAGGTGCTAT_S33_R1_001.fastq.gz
+  pADamID-iCA3P_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_33_pA-DamID_iCA3_P_DAM_B_CCACGATAAC-CATGCCTGAC_S34_R1_001.fastq.gz
+  pADamID-iCA3P_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_34_pA-DamID_iCA3_P_LB2_B_CTTGCGAAGA-AATGACGCGG_S27_R1_001.fastq.gz
+  pADamID-iCA3P_TXR_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_35_pA-DamID_iCA3_P_TXR_DAM_B_TGGCACGAAC-CCTGACTCTT_S35_R1_001.fastq.gz
+  pADamID-iCA3P_TXR_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_36_pA-DamID_iCA3_P_TXR_LB2_B_AACGACATCT-GTCTTGGAAT_S36_R1_001.fastq.gz
+  pADamID-iCA3_c7_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_37_pA-DamID_iCA3_c7_DAM_B_GCGAGATGGA-ACACTCTACT_S37_R1_001.fastq.gz
+  pADamID-iCA3_c7_r2_Lmnb2:
+    - /shared/gcf/r.schep/6940/fastq_files/6940_73_pA-DamID_iCA3_c7_LB2_B_TTGGCTCCAA-GTCTGATCCG_S73_R1_001.fastq.gz
+  pADamID-iCA3_c7_TXR_r2_Dam:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_39_pA-DamID_iCA3_c7_TXR_DAM_B_AGTGGTAGCA-TGGTGTTGAC_S39_R1_001.fastq.gz
+  pADamID-iCA3_c7_TXR_r2_Lmnb2:
+    - /shared/gcf/s.manzo/6892/fastq_files/6892_40_pA-DamID_iCA3_c7_TXR_LB2_B_TATCCAGTTC-TGAGCTACGT_S40_R1_001.fastq.gz
+
+
+# Bam control list, using basenames only
+dam_controls:
+  
+  pADamID-RPE0_r1_Lmnb2: pADamID-RPE0_r1_Dam
+  pADamID-DPURO3_r1_Lmnb2: pADamID-DPURO3_r1_Dam
+  pADamID-TXR3_r1_Lmnb2: pADamID-TXR3_r1_Dam
+  pADamID-TXR4_r1_Lmnb2: pADamID-TXR4_r1_Dam
+  pADamID-TXR5_r1_Lmnb2: pADamID-TXR5_r1_Dam
+  pADamID-TXR6_r1_Lmnb2: pADamID-TXR6_r1_Dam
+  pADamID-iCA3P_r1_Lmnb2: pADamID-iCA3P_r1_Dam
+  pADamID-iCA3P_TXR_r1_Lmnb2: pADamID-iCA3P_TXR_r1_Dam
+  pADamID-iCA3_c7_r1_Lmnb2: pADamID-iCA3_c7_r1_Dam
+  pADamID-iCA3_c7_TXR_r1_Lmnb2: pADamID-iCA3_c7_TXR_r1_Dam
+  pADamID-RPE0_r2_Lmnb2: pADamID-RPE0_r2_Dam
+  pADamID-DPURO3_r2_Lmnb2: pADamID-DPURO3_r2_Dam
+  pADamID-TXR3_r2_Lmnb2: pADamID-TXR3_r2_Dam
+  pADamID-TXR4_r2_Lmnb2: pADamID-TXR4_r2_Dam
+  pADamID-TXR5_r2_Lmnb2: pADamID-TXR5_r2_Dam
+  pADamID-TXR6_r2_Lmnb2: pADamID-TXR6_r2_Dam
+  pADamID-iCA3P_r2_Lmnb2: pADamID-iCA3P_r2_Dam
+  pADamID-iCA3P_TXR_r2_Lmnb2: pADamID-iCA3P_TXR_r2_Dam 
+  pADamID-iCA3_c7_r2_Lmnb2: pADamID-iCA3_c7_r2_Dam
+  pADamID-iCA3_c7_TXR_r2_Lmnb2: pADamID-iCA3_c7_TXR_r2_Dam
+
+
+# Replicate experiments
+replicates:
+  #RPE0
+  pADamID-RPE0_Lmnb2:
+    - pADamID-RPE0_r1_Lmnb2
+    - pADamID-RPE0_r2_Lmnb2
+  
+  #D_PURO3
+  pADamID-DPURO3_Lmnb2:
+    - pADamID-DPURO3_r1_Lmnb2
+    - pADamID-DPURO3_r2_Lmnb2
+  
+  #TXR3
+  pADamID-TXR3_Lmnb2:
+    - pADamID-TXR3_r1_Lmnb2
+    - pADamID-TXR3_r2_Lmnb2
+  
+  #TXR4
+  pADamID-TXR4_Lmnb2:
+    - pADamID-TXR4_r1_Lmnb2
+    - pADamID-TXR4_r2_Lmnb2
+  
+  #TXR5
+  pADamID-TXR5_Lmnb2:
+    - pADamID-TXR5_r1_Lmnb2
+    - pADamID-TXR5_r2_Lmnb2
+  
+  #TXR6
+  pADamID-TXR6_Lmnb2:
+    - pADamID-TXR6_r1_Lmnb2
+    - pADamID-TXR6_r2_Lmnb2
+  
+  #iCA3P
+  pADamID-iCA3P_Lmnb2:
+    - pADamID-iCA3P_r1_Lmnb2
+    - pADamID-iCA3P_r2_Lmnb2
+  
+  #iCA3P_TXR
+  pADamID-iCA3P_TXR_Lmnb2:
+    - pADamID-iCA3P_TXR_r1_Lmnb2
+    - pADamID-iCA3P_TXR_r2_Lmnb2
+  
+  #iCA3_c7
+  pADamID-iCA3_c7_Lmnb2:
+    - pADamID-iCA3_c7_r1_Lmnb2
+    - pADamID-iCA3_c7_r2_Lmnb2  
+  
+  #iCA3_c7_TXR
+  pADamID-iCA3_c7_TXR_Lmnb2:
+    - pADamID-iCA3_c7_TXR_r1_Lmnb2
+    - pADamID-iCA3_c7_TXR_r2_Lmnb2
+  
